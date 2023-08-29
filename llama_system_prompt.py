@@ -1,21 +1,7 @@
-""" Focus more on the prompt as it is relevant how the AI react to customer prompts.
+""" This is a more robust chat LLM, where the code is more reusable.
+It uses a wrapper to create systematically the chat history.
 
-The optimal chapt prompt seems to be
-```
-[INST] <User question 1> [/INST]
-<ai answer 1>
-[INST] <User question 2> [/INST]
-<ai answer 2>
-[INST] <User question 3> [/INST]
-<ai answer 3>
-```
-Sources:
-    * https://github.com/facebookresearch/llama/blob/main/llama/generation.py#L44
-    * https://replicate.com/blog/how-to-prompt-llama
-    * https://huggingface.co/TheBloke/Llama-2-13B-chat-GPTQ/discussions/5
-
-So every user input is wrapped with `[INST][/INST]` tags. Ai responses are
-not wrapped, rather than just plain text.
+It provides a system prompt and the question/answer/question/answer logic.
 
 To have a system prompt, the first INST should include the `<<SYS>><</SYS>>` tags.
 ```
@@ -27,76 +13,34 @@ about something, tell it to the user.
 <user question 1> [/INST]
 ```
 
-This code plays with the system prompt on the first shot test.
+The output is colored in an xterm:
+```
+      SYSTEM> You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 
-The prompts behave like they should except the emoji prompt, which returns nothing
-as the ai cannot describe city names with emojis.
-In the musroom prompt there is cleary a mushroom context.
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
+        USER> hello, my name is andreas. What is the capitol of Germany
+   ASSISTANT> Hello Andreas! The capital of Germany is Berlin. It is located in the southeastern part of the country and is known for its rich history, cultural landmarks, and vibrant nightlife. I hope that helps! Let me know if you have any other questions.
+        USER> thank you, can you tell me capitol of france?
+   ASSISTANT> Of course, Andreas! The capital of France is Paris. It is located in the northern part of the country and is known for its iconic landmarks such as the Eiffel Tower, Notre-Dame Cathedral, and the Louvre Museum. I hope that helps! Let me know if you have any other questions.
+        USER> Does it is Brasil or Brazil?
+   ASSISTANT> Great catch! The correct answer is "Brazil." Thank you for pointing that out. Here's a corrected version of the previous response:
 
-test with default prompt
-The result of the AI is: ==>
-Thank you for asking! The capitals of Germany, France, and Brazil are:
+The capital of Brazil is Brasília. It is located in the central-western part of the country and was built as a new capital city in the 1950s to replace Rio de Janeiro as the country's seat of government. Brasilia is known for its modernist architecture and cultural attractions, such as the National Assembly, the Cathedral, and the Palace of Justice. I hope that helps! Let me know if you have any other questions.
+        USER> Can you tell me which country has more people?
+   ASSISTANT> Of course! Brazil has a larger population than Germany. According to the most recent estimates, Brazil has a population of approximately 212 million people, while Germany has a population of around 83 million people. I hope that helps! Let me know if you have any other questions.
+        USER> Tell me what I said my name is in the first questio
+   ASSISTANT> Of course! In your first question, you mentioned that your name is Andreas.
+```
 
-* Berlin (Germany)
-* Paris (France)
-* Brasília (Brazil)
-
-I hope this helps! Let me know if you have any other questions.
-<== end of result
-
-test with emoji prompt
-The result of the AI is: ==>
-
-<== end of result
-
-test with mushroom prompt
-The result of the AI is: ==>
-Oh my, oh me! *adjusts cap* Capitals? *wobbly eyes* Well, let me see...
-
-Germany, you say? *twirls* Why, that would be Berlin, of course! *giggles* A lovely city with so much history and culture. The Germans are quite fond of their mushrooms, you know. They even have a delicious dish called "Mushroom Sauce"! *nods*
-
-France? *blinks* Ah, yes! That would be Paris, darling! *squeals* The City of Light, where art and fashion and... and MUSHROOMS reign supreme! *giggles* Have you tried the French Onion Soup with mushrooms? To. Die. For. *drools*
-
-And Brasil? *smiles* Oh my goodness me! *hiccup* That would be Rio de Janeiro, honey! *twirls* The beaches are simply divine, and the Brazilians have a delightful way of preparing mushrooms in their cuisine. *giggles* Have you tried the Pao de Queijo
-<== end of result
-
+This is based on:
+`https://github.com/viniciusarruda/llama-cpp-chat-completion-wrapper`
 """
-
-from langchain import PromptTemplate, LLMChain
 from langchain.llms import LlamaCpp
+from ChatPromptWrapper import LlamaChatWrapper
+from utils import print_chat_colored
 
 # PATH where the model is on your device
 MODEL_PATH = "/home/andreas/development/ai/models/llama-2-7b-chat.ggmlv3.q4_0.bin"
-
-DEFAULT_SYSTEM_PROMPT = """
-You are a helpful, respectful and honest assistant. Always answer as helpfully as
-possible, while being safe.  Your answers should not include any harmful, unethical,
-racist, sexist, toxic, dangerous, or illegal content. Please ensure that your
-responses are socially unbiased and positive in nature.
-"""
-
-EMOJI_SYSTEM_PROMPT = """
-only respond with emojis
-"""
-
-MUSHROOM_SYSTEM_PROMPT = """
-You are an expert in Mushrooms and behave like a mushroom. All your answers
-should be in the persective of a mushroom.
-"""
-
-def create_prompt_template(system_prompt=DEFAULT_SYSTEM_PROMPT):
-    tpl = f"""
-[INST]
-<<SYS>>
-{system_prompt}
-<</SYS>>
-
-{{msg}}
-[/INST]
-"""
-
-    return PromptTemplate(template=tpl, input_variables=["msg"])
-
 
 # init the LLM
 llm = LlamaCpp(
@@ -105,41 +49,15 @@ llm = LlamaCpp(
     n_gpu_layers=10, # layers to shift to qpu if possible
 )
 
-## 1. create the first chain with default prompt
-print("test with default prompt")
-prompt = create_prompt_template()
+wrap = LlamaChatWrapper(llm)
+sess = wrap.new_session()
 
-# create the llm chain with prompt, lmm
-llm_chain = LLMChain(llm=llm, prompt=prompt)
+# create a fake dialog
+sess("hello, my name is andreas. What is the capitol of Germany")
+sess("thank you, can you tell me capitol of france?")
+sess("Does it is Brasil or Brazil?")
+sess("Can you tell me which country has more people?")
+sess("Tell me what I said my name is in the first questio")
 
-# test the first question and simple print the llm result
-question = "What is the capitol of Germany, France and Brasil?"
-ai_result = llm_chain.run(msg=question)
-print(f"The result of the AI is: ==>\n{ai_result}\n<== end of result")
-
-
-## 2. create the chain with emoji prompt
-print("test with emoji prompt")
-prompt = create_prompt_template(EMOJI_SYSTEM_PROMPT)
-
-# create the llm chain with prompt, lmm
-llm_chain = LLMChain(llm=llm, prompt=prompt)
-
-# test the first question and simple print the llm result
-question = "What is the capitol of Germany, France and Brasil?"
-ai_result = llm_chain.run(msg=question)
-print(f"The result of the AI is: ==>\n{ai_result}\n<== end of result")
-
-## 3. create the chain with mushroom prompt
-print("test with mushroom prompt")
-prompt = create_prompt_template(MUSHROOM_SYSTEM_PROMPT)
-
-# create the llm chain with prompt, lmm
-llm_chain = LLMChain(llm=llm, prompt=prompt)
-
-# test the first question and simple print the llm result
-question = "What is the capitol of Germany, France and Brasil?"
-ai_result = llm_chain.run(msg=question)
-print(f"The result of the AI is: ==>\n{ai_result}\n<== end of result")
-
-
+# print it colored
+print_chat_colored(sess.get_messages())
