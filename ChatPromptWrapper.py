@@ -1,5 +1,14 @@
-from enum import Enum
-from collections import UserDict
+from uuid import uuid4
+
+from langchain.llms import LlamaCpp
+from langchain.memory.chat_memory import ChatMessageHistory
+from langchain.schema.messages import (
+    AIMessage,
+    ChatMessage,
+    HumanMessage,
+    SystemMessage,
+)
+
 
 B_INST, E_INST = "[INST]", "[/INST]"
 B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
@@ -9,222 +18,69 @@ You are a helpful, respectful and honest assistant. Always answer as helpfully a
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.\
 """
 
-class MessageRole(Enum):
-    SYSTEM = 1
-    USER = 2
-    ASSISTANT = 3
+def _format_message_as_text(message):
+    """ Format the message based on its type
+        and build the prompt text for the message
+        type for the llama2 model
 
-    @classmethod
-    def has_value(self, val):
-        return val in self._value2member_map_
+    Parameters
+    ----------
+    messages: ChatMessage, HumanMessage, AIMessage, SystemMessage
 
-    @classmethod
-    def has_key(self, key):
-        return key in self._member_names_
-
-    @classmethod
-    def as_str(self):
-        print(self.value)
-        print(self.name)
-        return self._member_names_[val]
-
-
-class Message(UserDict):
-    """ definition of a single message.
-
-        A message can be a system message (system prompt)
-        or a user message (question) or a assistant message
-        (ai response).
+    Returns
+    -------
+    str
     """
-    def __init__(self, role, msg):
-        """ Init a new Message by defining its role and content
+    if isinstance(message, ChatMessage):
+        message_text = f"\n\n{message.role.capitalize()}: {message.content}"
+    elif isinstance(message, HumanMessage):
+        message_text = f"[INST] {message.content} [/INST]"
+    elif isinstance(message, AIMessage):
+        message_text = f"{message.content}"
+    elif isinstance(message, SystemMessage):
+        message_text = f"<<SYS>> {message.content} <</SYS>>"
+    else:
+        raise ValueError(f"Got unknown type {message}")
 
-        Parameters
-        ----------
-        role: MessageRole
-        msg: str
-        """
-        super().__init__({
-            "role": role,
-            "msg": msg
-        })
+    return message_text
+
+def _format_messages_as_text(messages):
+    """ Formats the joined prompt str based on the
+        messages in the ChatMessageHistory store
+
+    Parameters
+    ----------
+    messages: list
+        List of messages from the ChatMessageHistory
+
+    Returns
+    -------
+    str
+    """
+    return "\n".join(
+        [_format_message_as_text(message) for message in messages]
+    )
 
 class LlamaChatSession:
-    """ Session to interact with the llm and replay
-        the history of the conversation in each new
-        query to the llm. Handles the initial build
-        of a system prompt and the format of new
-        messages.
+    """ An individual session which is tracked by the wrapper
+        This calls the llm model and tracks the messages
+        in the session
     """
-    def __init__(self, llm, system_prompt):
-        """ Init the session, setup everything based
-            on the input of this constructor
+    llm: LlamaCpp
+    memory: ChatMessageHistory
 
-        Parameters
-        ----------
-        llm: LlamaCpp
-            instance of the llama cpp model
-        system_prompt: str
-            system prompt for this session
-        """
+    def __init__(self, llm, memory, system_prompt):
         self.llm = llm
-        self.messages = []
+        self.memory = memory
 
-        self.messages = [
-            {
-                "role": MessageRole.SYSTEM,
-                "msg": system_prompt or DEFAULT_SYSTEM_PROMPT,
-            }
-        ]
+        self.memory.add_message(SystemMessage(content=system_prompt))
 
-    def __call__(self, message, max_tokens = 128):
-        """ Query the AI with a new message
+    def __call__(self, message):
+        self.memory.add_user_message(message)
+        res = self.llm(_format_messages_as_text(self.memory.messages))
+        self.memory.add_ai_message(res)
 
-        This will prepare the message in the way that the AI
-        understands its best with the history of the chat.
-        Each response is added to the chat history and reused
-        later in the next queries.
-
-        The interaction with the LLM is done with the `generate`
-        call, instead of directly calling the instance.
-        The `generate` expects not strings, rather than the encoded
-        tokens as int form the vocab dict. The input is List[Int].
-
-        Parameters
-        ----------
-        message: str
-        max_tokens: int
-            maximal tokens in the response
-
-        Returns
-        -------
-        str
-        """
-        # append the new message to the history
-        self.messages.append(Message(MessageRole.USER, message))
-
-        # convert the chat history into tokens, which is then fed
-        # to the AI to calculate the response
-        message_tokens = self.prepare_messages(self.messages)
-        response = self.llm.client.generate(message_tokens)
-
-        # check if we hit the max tokens limit
-        max_tokens = (
-            max_tokens if max_tokens + len(message_tokens) < self.llm.n_ctx else (self.llm.n_ctx - len(messages_tokens))
-        )
-        result = []
-        # iterate over the response and detokenize the resulting
-        # tokens (int) into words again,w hich then can be used later
-        for i, token in enumerate(response):
-            if max_tokens == i or token == self.llm.client.token_eos():
-                break
-            result.append(self.llm.client.detokenize([token]).decode("utf-8"))
-
-        result = "".join(result).strip()
-
-        # append the AI response to the chat history
-        self.messages.append(Message(MessageRole.ASSISTANT, result))
-
-        # return the response
-        return result
-
-    def get_messages(self, start=None, stop=None, step=None):
-        """ Returns the messages
-
-            if the start/stop/step params are given, it will
-            handle them like the python list index accessing
-            using slice() function internally.
-
-        Parameters
-        ----------
-        start: int
-        stop: int
-        step: int
-
-        Returns
-        -------
-        list
-        """
-        if any([start, stop, step]):
-            return self.messages[slice(start, stop, step)]
-
-        return self.messages
-
-    def prepare_messages(self, messages):
-        """ Prepare the message that will be put into the AI
-
-        This builds the complete history based on a system message,
-        the user questions and AIs answers as formated string.
-        The string is encoded into tokens (List[Int]) to be used
-        later to call `generate` on the LLM.
-
-        This formats with <<SYS>> and [INST] as well as BOS/EOS tags.
-
-        Parameters
-        ----------
-        messages: List[Message]
-            list of Messages of the chat history
-
-        Returns
-        -------
-        List[Int]
-            tokenized chat history
-        """
-        # first put the system prompt
-        messages = [
-            {
-                "role": MessageRole.SYSTEM,
-                "msg": B_SYS + messages[0]["msg"] + E_SYS + messages[1]["msg"],
-            }
-        ] + messages[2:]
-
-        # all messages here should be in order of user - ai - user - ai - user ...
-        message_tokens = sum(
-        [
-            self.tokenizer_encode(
-                f"{B_INST} {prompt['msg'].strip()} {E_INST} {answer['msg'].strip()} ",
-                True,
-                True
-            )
-            for prompt, answer in zip(messages[::2], messages[1::2])
-        ],
-        [],
-        )
-
-        message_tokens += self.tokenizer_encode(
-            f"{B_INST} {messages[-1]['msg'].strip()} {E_INST}",
-            True,
-            False,
-        )
-
-        return message_tokens
-
-    def tokenizer_encode(self, msg, bos=False, eos=False):
-        """ Encode the tokens to token ids for later use
-            in the `generate` function.
-
-            Then it will handle the BOS/EOS indicator.
-
-        Parameters
-        ----------
-        msg: str
-            the message to tokenize
-        bos: boolean, default False
-        eos: boolean, default False
-
-        Returns
-        -------
-        List[Int]
-        """
-        tokens = self.llm.client.tokenize(text=b" " + bytes(msg, encoding="utf-8"), add_bos=False)
-
-        if bos:
-            tokens = [self.llm.client.token_bos()] + tokens
-
-        if eos:
-            tokens = tokens + [self.llm.client.token_eos()]
-
-        return tokens
+        return res
 
 class LlamaChatWrapper:
     """ Reusable wrapper to create a session based
@@ -239,8 +95,9 @@ class LlamaChatWrapper:
         llm: LlamaCpp
         """
         self.llm = llm
+        self.memories = {}
 
-    def new_session(self, system_prompt=None):
+    def new_session(self, system_prompt=DEFAULT_SYSTEM_PROMPT):
         """ Creates a new Session by using the wrapper
             config to return a LlamaChatSession instance
 
@@ -253,5 +110,8 @@ class LlamaChatWrapper:
         -------
         LlamaChatSession
         """
-        return LlamaChatSession(self.llm, system_prompt)
+        memory = ChatMessageHistory(return_messages=True)
+        conversation_id = uuid4()
+        self.memories[conversation_id] = memory
 
+        return (conversation_id, LlamaChatSession(self.llm, memory, system_prompt))
