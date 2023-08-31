@@ -1,4 +1,3 @@
-from uuid import uuid4
 
 from langchain.llms import LlamaCpp
 from langchain.memory.chat_memory import ChatMessageHistory
@@ -97,12 +96,13 @@ class LlamaChatWrapper:
         self.llm = llm
         self.memories = {}
 
-    def new_session(self, system_prompt=DEFAULT_SYSTEM_PROMPT):
+    def new_session(self, conversation_id, system_prompt=DEFAULT_SYSTEM_PROMPT):
         """ Creates a new Session by using the wrapper
             config to return a LlamaChatSession instance
 
         Parameters
         ----------
+        conversation_id: str
         system_prompt: str, None
             system prompt for this session
 
@@ -110,8 +110,9 @@ class LlamaChatWrapper:
         -------
         LlamaChatSession
         """
-        memory = ChatMessageHistory(return_messages=True)
-        conversation_id = uuid4()
-        self.memories[conversation_id] = memory
+        memory = self.memories.get(conversation_id)
+        if not memory:
+            memory = ChatMessageHistory(return_messages=True)
+            self.memories[conversation_id] = memory
 
-        return (conversation_id, LlamaChatSession(self.llm, memory, system_prompt))
+        return LlamaChatSession(self.llm, memory, system_prompt)

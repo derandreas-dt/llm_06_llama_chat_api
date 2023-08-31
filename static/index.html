@@ -1,0 +1,367 @@
+<html>
+    <head>
+        <title>LLama Local Chat system</title>
+        <link rel="stylesheet" href="spinner.css">
+        <script type="text/html" id="tpl_li">
+            <li class="chat-list-li" data-conversation-id="<%=conversationId%>"><%=title%></li>
+        </script>
+        <script type="text/html" id="tpl_chat_human">
+            <div class="chat-message chat-human"><%=message%></div>
+        </script>
+        <script type="text/html" id="tpl_chat_assistant">
+            <div class="chat-message chat-assistant"><%=message%></div>
+        </script>
+        <script>
+            // Simple JavaScript Templating
+            // John Resig - https://johnresig.com/ - MIT Licensed
+            (function(){
+              var cache = {};
+
+              this.tmpl = function tmpl(str, data){
+                // Figure out if we're getting a template, or if we need to
+                // load the template - and be sure to cache the result.
+                var fn = !/\W/.test(str) ?
+                  cache[str] = cache[str] ||
+                    tmpl(document.getElementById(str).innerHTML) :
+
+                  // Generate a reusable function that will serve as a template
+                  // generator (and which will be cached).
+                  new Function("obj",
+                    "var p=[],print=function(){p.push.apply(p,arguments);};" +
+
+                    // Introduce the data as local variables using with(){}
+                    "with(obj){p.push('" +
+
+                    // Convert the template into pure JavaScript
+                    str
+                      .replace(/[\r\t\n]/g, " ")
+                      .split("<%").join("\t")
+                      .replace(/((^|%>)[^\t]*)'/g, "$1\r")
+                      .replace(/\t=(.*?)%>/g, "',$1,'")
+                      .split("\t").join("');")
+                      .split("%>").join("p.push('")
+                      .split("\r").join("\\'")
+                  + "');}return p.join('');");
+
+                // Provide some basic currying to the user
+                return data ? fn( data ) : fn;
+              };
+            })();
+        </script>
+        <style>
+        body {
+          background: white;
+          color: #323232;
+          font-weight: 300;
+          height: 100vh;
+          margin: 0;
+          font-family: Helvetica neue, roboto;
+        }
+        .flex-container {
+          display: grid;
+          width: 100%;
+          height: 100%;
+          grid-template-columns: 25% 75%;
+          grid-template-rows: 5% 85% 10%;
+        }
+
+        .chats {
+          grid-column: 1 / 2;
+          grid-row: 1 / 4;
+          text-align:center;
+          border-right: 1px solid #666;
+        }
+
+        .title {
+          grid-column: 2 / 3;
+          grid-row: 1 / 2;
+          display: flex;
+        }
+
+        .all-center {
+            justify-content: center;
+            align-items: center;
+        }
+
+        .chat {
+          grid-column: 2 / 3;
+          grid-row: 2 / 3;
+          padding: 1rem;
+        }
+
+        .query {
+          grid-column: 2 / 3;
+          grid-row: 3 / 4;
+          text-align: center;
+          border-top: 1px solid #333;
+          padding: 1rem;
+        }
+
+        .chat-list {
+            list-style: none;
+            text-align: left;
+            margin: 0;
+            padding: 0;
+        }
+
+        .chat-list li {
+            padding: 10px;
+            margin: 5px;
+            background: #f0f0f0;
+            border: 1px solid #607D8B;
+            border-radius: 10px;
+            color: #000;
+        }
+
+        .btn-new-chat,
+        .btn-query-go {
+            width: 80%;
+            padding: 10px;
+            color: blue;
+            background: lightblue;
+            text-align:center;
+            vertical-align:middle;
+        }
+
+        .chat-container {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow-y: scroll;
+            height: 100%;
+        }
+
+        .chat-message {
+            max-width: 65%;
+            word-wrap: break-word;
+            margin-bottom: 12px;
+            line-height: 24px;
+            margin: 0.5em 2em;
+        }
+        .chat-assistant {
+            position: relative;
+            padding: 10px 20px;
+            color: black;
+            background: #E5E5EA;
+            border-radius: 25px;
+            margin-left: auto;
+        }
+        .chat-human {
+            position: relative;
+            padding: 10px 20px;
+            color: white;
+            background: #0B93F6;
+            border-radius: 25px;
+            float: left;
+            margin-right: auto;
+        }
+        .text-box {
+            border: solid 1px black;
+            width: 90%;
+            font-size: 110%;
+            padding: 5px;
+            display: inline-block;
+        }
+
+        .text-box:focus{
+            outline:0;
+        }
+
+        </style>
+    </head>
+    <body>
+        <div id="loading" class="loading">
+            Loading&#8230;
+        </div>
+        <div class="flex-container">
+            <div class="chats">
+                <h2>Old Chats</h2>
+                <button class="btn-new-chat" id="btnNewChat">Create new Chat</button>
+                <ul class="chat-list" id="chatlist"> </ul>
+            </div>
+            <div class="title all-center">
+                <h1>Welcome to chat</h1>
+            </div>
+            <div class="chat">
+                <div class="chat-container">
+                    <p>Welcome to the simple chat tool with API backend</p>
+                </div>
+            </div>
+            <div class="query">
+                <input id="queryInput" class="text-box" placeholder="type here" />
+                <button id="submitInput" class="btn-query-go">submit (ctrl+enter)</button>
+            </div>
+        </div>
+    </body>
+    <script>
+        function initApplication() {
+
+            let currentChat = null
+            const URL_QUERY = "http://127.0.0.1:8000/api/query"
+            const loadingDiv = document.getElementById('loading');
+
+            const STORAGE_KEY = 'ai-chats-store'
+
+            const showSpinner = () => {
+              loadingDiv.style.visibility = 'visible';
+            }
+
+            const hideSpinner = () => {
+              loadingDiv.style.visibility = 'hidden';
+            }
+
+
+            const onClickChat = (el) => {
+                const conversationId = el.target.getAttribute('data-conversation-id')
+                const chat = chats.find(chat => chat.conversationId === conversationId)
+
+                if (!chat) {
+                    console.log("no chat found")
+                    return
+                }
+
+                updateChatMessages(chat)
+
+            }
+
+            const updateChatMessages = (chat) => {
+                let old_msgs = ''
+                chat.messages.forEach(message => {
+                    let tpl = "tpl_chat_" + message.role
+                    old_msgs += tmpl(tpl, message)
+                })
+
+                currentChat = chat
+                const container = document.querySelector('.chat-container')
+                container.innerHTML = old_msgs
+                container.scrollTop = container.scrollHeight
+            }
+
+            const send = async () => {
+                const inp = document.querySelector('#queryInput')
+
+                if (!inp || inp.value.length === 0) {
+                    return
+                }
+                const val = inp.value
+                // send api
+                inp.value = ''
+
+                currentChat.messages.push({
+                    role: 'human',
+                    message: val,
+                })
+
+                // update to show user query before posting
+                updateChatMessages(currentChat)
+
+                try {
+                    showSpinner()
+                    const res = await fetch(URL_QUERY, {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            conversationId: currentChat.conversationId,
+                            query: val,
+                        })
+                    })
+
+                    if (res.status !== 200) {
+                        alert('API failed somehow... sorry')
+                        throw new Error("api failed")
+                    }
+
+                    const body = await res.json()
+                    // update convId and the messages
+                    const oldConvId = currentChat.conversationId
+                    currentChat.conversationId = body.conversationId
+                    currentChat.messages.push({
+                        role: 'assistant',
+                        message: body.message,
+                    })
+
+                    // if we only have 2 items here, its the first conversation
+                    // update the title
+                    if (currentChat.messages.length === 2) {
+                        currentChat.title = val
+                    }
+
+                    // now we need to update the currentChat in the chats global
+                    const idx = chats.findIndex(chat => chat.conversationId === oldConvId)
+                    if (idx) {
+                        chats[idx] = currentChat
+                    }
+
+                    updateChatMessages(currentChat)
+                    updateChatList(chats)
+                    updateLocalStoreChats(chats)
+
+                } catch (err) {
+                    console.error(err)
+                } finally {
+                    hideSpinner()
+                }
+            }
+
+            const addNewChat = (event) => {
+                const newChat = {
+                    conversationId: 'prepare-dummy-' + Date.now(),
+                    title: 'new chat...',
+                    messages: [],
+                }
+                chats.push(newChat)
+
+                updateLocalStoreChats()
+                updateChatList(chats)
+                updateChatMessages(newChat)
+                currentChat = newChat
+            }
+
+            const updateLocalStoreChats = () => {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(chats))
+            }
+
+            const getLocalStoreChats = () => {
+                return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
+            }
+
+            const updateChatList = (chats) => {
+                const chatList = document.getElementById("chatlist");
+                let chatListContent = ''
+                chats.forEach(chat => {
+                    chatListContent += tmpl("tpl_li", chat)
+                })
+                chatList.innerHTML = chatListContent
+
+                document.querySelectorAll(".chat-list-li").forEach(el => el.addEventListener("click", onClickChat))
+            }
+
+            // apply eventlistener on click
+            document.querySelector('#btnNewChat').addEventListener('click', addNewChat)
+            document.querySelector('#submitInput').addEventListener('click', send)
+            document.querySelector('#queryInput').addEventListener('keydown', (event) => {
+                if(event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    send()
+                }
+            })
+
+            // we are ready, load old chats from localStorage
+            let chats = getLocalStoreChats()
+
+            if (!Array.isArray(chats)) {
+                chats = []
+                updateLocalStoreChats(chats)
+            }
+
+            updateChatList(chats)
+        }
+
+        document.onreadystatechange = function () {
+          if (document.readyState == "complete") {
+              initApplication();
+            }
+        }
+    </script>
+</html>
